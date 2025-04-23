@@ -1,3 +1,4 @@
+// src/components/TeamApplicationForm.jsx (обновленный)
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
 
@@ -9,25 +10,141 @@ const TeamApplicationForm = ({ competitionId, user, onSuccess, onCancel }) => {
   const [rolesNeeded, setRolesNeeded] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [competition, setCompetition] = useState(null);
+  const [userRegion, setUserRegion] = useState(null);
 
+  // Загрузка данных соревнования и пользователя
+  useEffect(() => {
+    const fetchCompetitionAndUserData = async () => {
+      try {
+        // Загрузка данных соревнования
+        const { data: competitionData, error: competitionError } = await supabase
+          .from('competitions')
+          .select('id, type, region_id')
+          .eq('id', competitionId)
+          .single();
+        
+        if (competitionError) throw competitionError;
+        setCompetition(competitionData);
+        
+        // Загрузка данных пользователя, включая регион
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('id, region_id')
+          .eq('id', user.id)
+          .single();
+        
+        if (userError) throw userError;
+        setUserRegion(userData.region_id);
+      } catch (err) {
+        console.error('Ошибка при загрузке данных:', err.message);
+        setError('Не удалось загрузить необходимые данные.');
+      }
+    };
+    
+    if (competitionId && user) {
+      fetchCompetitionAndUserData();
+    }
+  }, [competitionId, user]);
+
+  // Загрузка команд пользователя
   useEffect(() => {
     const fetchTeams = async () => {
       try {
-        const { data, error } = await supabase
+        // Базовый запрос для получения команд
+        let query = supabase
           .from('teams')
-          .select('id, name')
+          .select(`
+            id, 
+            name,
+            captain_user_id,
+            users!teams_captain_user_id_fkey(region_id)
+          `)
           .eq('captain_user_id', user.id);
-
+        
+        // Получаем команды
+        const { data, error } = await query;
+        
         if (error) throw error;
-        setTeams(data || []);
+        
+        // Фильтруем команды по региону для регионального соревнования
+        let filteredTeams = data || [];
+        if (competition && competition.type === 'региональное' && competition.region_id) {
+          filteredTeams = filteredTeams.filter(team => {
+            // Проверяем регион капитана команды
+            return team.users?.region_id === competition.region_id;
+          });
+        }
+        
+        // Исключаем команды, от которых уже поданы заявки
+        const teamIds = filteredTeams.map(team => team.id);
+        if (teamIds.length > 0) {
+          const { data: existingApps } = await supabase
+            .from('applications')
+            .select('applicant_team_id')
+            .eq('competition_id', competitionId)
+            .in('applicant_team_id', teamIds);
+          
+          const appliedTeamIds = existingApps ? existingApps.map(app => app.applicant_team_id) : [];
+          filteredTeams = filteredTeams.filter(team => !appliedTeamIds.includes(team.id));
+        }
+        
+        setTeams(filteredTeams);
       } catch (error) {
         console.error('Ошибка при загрузке команд:', error.message);
         setError('Не удалось загрузить список команд.');
       }
     };
 
-    fetchTeams();
-  }, [user]);
+    if (user && competition) {
+      fetchTeams();
+    }
+  }, [user, competitionId, competition]);
+
+  // Проверка, может ли команда участвовать в соревновании
+  const canTeamApply = async (teamId) => {
+    // Для открытого соревнования - все могут участвовать
+    if (!competition || competition.type === 'открытое') {
+      return true;
+    }
+    
+    // Для регионального соревнования - проверка региона
+    if (competition.type === 'региональное') {
+      try {
+        // Получаем всех участников команды
+        const { data: members, error: membersError } = await supabase
+          .from('team_members')
+          .select('user_id')
+          .eq('team_id', teamId);
+        
+        if (membersError) throw membersError;
+        
+        // Если есть участники, проверяем их регионы
+        if (members && members.length > 0) {
+          const memberIds = members.map(member => member.user_id);
+          
+          const { data: users, error: usersError } = await supabase
+            .from('users')
+            .select('region_id')
+            .in('id', memberIds);
+          
+          if (usersError) throw usersError;
+          
+          // Проверяем, что все участники из нужного региона
+          const allFromRegion = users.every(user => user.region_id === competition.region_id);
+          return allFromRegion;
+        }
+        
+        // Если участников нет, проверяем только регион капитана
+        return userRegion === competition.region_id;
+      } catch (err) {
+        console.error('Ошибка при проверке региона команды:', err.message);
+        return false;
+      }
+    }
+    
+    return true;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -39,6 +156,13 @@ const TeamApplicationForm = ({ competitionId, user, onSuccess, onCancel }) => {
         throw new Error('Выберите команду.');
       }
 
+      // Проверка, может ли команда участвовать
+      const canApply = await canTeamApply(selectedTeamId);
+      if (!canApply) {
+        throw new Error('Эта команда не может участвовать в данном соревновании. Проверьте, что все участники команды из требуемого региона.');
+      }
+
+      // Проверка на существующие заявки
       const { data: existingApplication, error: checkError } = await supabase
         .from('applications')
         .select('id')
@@ -53,6 +177,7 @@ const TeamApplicationForm = ({ competitionId, user, onSuccess, onCancel }) => {
         throw new Error('Заявка от этой команды уже подана.');
       }
 
+      // Создание заявки
       const applicationData = {
         competition_id: competitionId,
         applicant_team_id: selectedTeamId,
@@ -88,22 +213,40 @@ const TeamApplicationForm = ({ competitionId, user, onSuccess, onCancel }) => {
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
       <h2 className="text-lg font-semibold mb-4">Подача командной заявки</h2>
+      
+      {/* Предупреждение для региональных соревнований */}
+      {competition && competition.type === 'региональное' && (
+        <div className="mb-4 p-3 bg-yellow-900 text-yellow-100 rounded-md">
+          <p className="text-sm">
+            Внимание! Для участия в региональном соревновании все члены команды должны быть из региона проведения соревнования.
+          </p>
+        </div>
+      )}
+      
       <form onSubmit={handleSubmit}>
         <div className="mb-4">
           <label className="block text-gray-300 mb-1">Выберите команду *</label>
-          <select
-            value={selectedTeamId}
-            onChange={(e) => setSelectedTeamId(e.target.value)}
-            className="w-full p-2 bg-gray-700 border border-gray-600 rounded focus:outline-none focus:border-blue-500"
-            required
-          >
-            <option value="">Выберите команду</option>
-            {teams.map((team) => (
-              <option key={team.id} value={team.id}>
-                {team.name}
-              </option>
-            ))}
-          </select>
+          {teams.length === 0 ? (
+            <div className="p-3 bg-gray-700 text-gray-400 rounded">
+              {competition && competition.type === 'региональное' 
+                ? 'У вас нет доступных команд из нужного региона'
+                : 'У вас нет доступных команд'}
+            </div>
+          ) : (
+            <select
+              value={selectedTeamId}
+              onChange={(e) => setSelectedTeamId(e.target.value)}
+              className="w-full p-2 bg-gray-700 border border-gray-600 rounded focus:outline-none focus:border-blue-500"
+              required
+            >
+              <option value="">Выберите команду</option>
+              {teams.map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div className="mb-4">
@@ -162,7 +305,7 @@ const TeamApplicationForm = ({ competitionId, user, onSuccess, onCancel }) => {
           <button
             type="submit"
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition"
-            disabled={loading}
+            disabled={loading || teams.length === 0 || !selectedTeamId}
           >
             {loading ? 'Отправка...' : 'Отправить заявку'}
           </button>

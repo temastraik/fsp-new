@@ -1,4 +1,4 @@
-// src/components/ApplicationsManagement.jsx
+// src/components/ApplicationsManagement.jsx (обновленный)
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -11,7 +11,7 @@ const ApplicationsManagement = () => {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState(null); // Добавляем состояние для активной вкладки
+  const [activeTab, setActiveTab] = useState(null); // Состояние для активной вкладки
 
   // Получение текущего пользователя
   useEffect(() => {
@@ -51,7 +51,7 @@ const ApplicationsManagement = () => {
           throw new Error('У вас нет прав для управления заявками на это соревнование');
         }
         
-        // Загрузка всех заявок на соревнование
+        // Загрузка всех заявок на соревнование с дополнительной информацией
         const { data: applicationsData, error: applicationsError } = await supabase
           .from('applications')
           .select(`
@@ -61,8 +61,11 @@ const ApplicationsManagement = () => {
             applicant_team_id,
             status,
             submitted_at,
-            users!applicant_user_id(id, full_name, email),
-            teams!applicant_team_id(id, name, captain_user_id, users!captain_user_id(full_name, email))
+            submitted_by_user_id,
+            additional_data,
+            users!applicant_user_id(id, full_name, email, region_id, regions(name)),
+            teams!applicant_team_id(id, name, captain_user_id, users!captain_user_id(id, full_name, email, region_id, regions(name))),
+            users!submitted_by_user_id(id, full_name, email, role, region_id, regions(name))
           `)
           .eq('competition_id', id)
           .order('submitted_at', { ascending: false });
@@ -252,12 +255,64 @@ const ApplicationsManagement = () => {
                               <p className="text-sm text-gray-400">
                                 Капитан: {app.teams?.users?.full_name || app.teams?.users?.email || 'Неизвестно'}
                               </p>
+                              
+                              {/* Информация о регионе капитана */}
+                              {app.teams?.users?.regions && (
+                                <p className="text-sm text-gray-400">
+                                  Регион: {app.teams?.users?.regions?.name || 'Не указан'}
+                                </p>
+                              )}
+                              
+                              {/* Информация о подателе заявки, если это региональный представитель */}
+                              {app.users?.submitted_by_user_id?.role === 'regional_rep' && 
+                               app.users?.submitted_by_user_id?.id !== app.teams?.captain_user_id && (
+                                <div className="mt-2 p-2 bg-blue-900 bg-opacity-50 rounded-md">
+                                  <p className="text-sm">
+                                    <span className="font-semibold">Заявка подана региональным представителем:</span> {app.users?.submitted_by_user_id?.full_name || app.users?.submitted_by_user_id?.email}
+                                  </p>
+                                  <p className="text-sm text-gray-400">
+                                    Регион: {app.users?.submitted_by_user_id?.regions?.name || 'Не указан'}
+                                  </p>
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <div className="mb-4">
                               <h3 className="text-lg font-semibold">{app.users?.full_name || 'Участник'}</h3>
                               <p className="text-sm text-gray-400">
                                 Email: {app.users?.email || 'Неизвестно'}
+                              </p>
+                              {/* Информация о регионе пользователя */}
+                              {app.users?.regions && (
+                                <p className="text-sm text-gray-400">
+                                  Регион: {app.users?.regions?.name || 'Не указан'}
+                                </p>
+                              )}
+                              
+                              {/* Информация, если заявка подана региональным представителем */}
+                              {app.users?.submitted_by_user_id?.role === 'regional_rep' && 
+                               app.users?.submitted_by_user_id?.id !== app.applicant_user_id && (
+                                <div className="mt-2 p-2 bg-blue-900 bg-opacity-50 rounded-md">
+                                  <p className="text-sm">
+                                    <span className="font-semibold">Заявка подана региональным представителем:</span> {app.users?.submitted_by_user_id?.full_name || app.users?.submitted_by_user_id?.email}
+                                  </p>
+                                  <p className="text-sm text-gray-400">
+                                    Регион: {app.users?.submitted_by_user_id?.regions?.name || 'Не указан'}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          
+                          {/* Дополнительная информация о неполной команде */}
+                          {app.application_type === 'командная' && app.status === 'формируется' && app.additional_data && (
+                            <div className="mb-4 p-2 bg-gray-700 rounded-md text-sm">
+                              <p className="font-semibold">Команда ищет участников:</p>
+                              <p className="text-gray-400">
+                                Требуется: {JSON.parse(app.additional_data).required_members || '-'} участников
+                              </p>
+                              <p className="text-gray-400">
+                                Роли: {JSON.parse(app.additional_data).roles_needed || '-'}
                               </p>
                             </div>
                           )}

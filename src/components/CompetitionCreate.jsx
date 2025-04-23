@@ -73,10 +73,12 @@ const CustomDateTimeInput = ({ value, onChange, placeholder, required = false })
 const CompetitionCreate = () => {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
+  const [userRole, setUserRole] = useState(null);
   const [loading, setLoading] = useState(false);
   const [disciplines, setDisciplines] = useState([]);
   const [regions, setRegions] = useState([]);
   const [error, setError] = useState(null);
+
   
   // Состояние формы
   const [formData, setFormData] = useState({
@@ -93,15 +95,32 @@ const CompetitionCreate = () => {
     status: 'черновик'
   });
   
-  // Загрузка пользователя и необходимых данных
+  // Получение роли пользователя при загрузке
   useEffect(() => {
     const fetchUser = async () => {
       const { data } = await supabase.auth.getUser();
       setUser(data?.user || null);
-
+  
       // Если пользователь получен, сразу проверяем/создаем профиль
       if (data?.user) {
-        await ensureUserProfile(data.user);
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('id, role, region_id')
+          .eq('id', data.user.id)
+          .single();
+        
+        if (!userError && userData) {
+          // Если пользователь - региональный представитель, автоматически заполняем его регион
+          if (userData.role === 'regional_rep' && userData.region_id) {
+            setFormData(prevData => ({
+              ...prevData,
+              region_id: userData.region_id
+            }));
+          }
+          
+          // Запоминаем роль для проверок
+          setUserRole(userData.role);
+        }
       }
     };
     
@@ -181,24 +200,57 @@ const CompetitionCreate = () => {
     fetchData();
   }, []);
   
-  // Обработчик изменения полей формы
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    
-    // Особая обработка для поля type
-    if (name === 'type' && value !== 'региональное') {
-      setFormData({
-        ...formData,
-        [name]: value,
-        region_id: null // Сбрасываем регион для открытых и федеральных соревнований
-      });
-    } else {
-      setFormData({
-        ...formData,
-        [name]: value
-      });
+// Модифицируем обработчик изменения типа соревнования
+const handleChange = (e) => {
+  const { name, value } = e.target;
+  
+  if (name === 'type') {
+    // Если выбран тип "федеральное", проверяем роль
+    if (value === 'федеральное' && userRole !== 'fsp_admin') {
+      setError('Только администраторы ФСП могут создавать федеральные соревнования');
+      return;
     }
-  };
+    
+    // Если тип "региональное" и пользователь - региональный представитель, 
+    // автоматически устанавливаем его регион
+    if (value === 'региональное' && userRole === 'regional_rep' && user) {
+      // Получаем регион пользователя
+      supabase
+        .from('users')
+        .select('region_id')
+        .eq('id', user.id)
+        .single()
+        .then(({ data, error }) => {
+          if (!error && data && data.region_id) {
+            setFormData({
+              ...formData,
+              type: value,
+              region_id: data.region_id
+            });
+          } else {
+            setFormData({
+              ...formData,
+              type: value,
+              region_id: null
+            });
+          }
+        });
+      return;
+    }
+    
+    // Обычная обработка для других случаев
+    setFormData({
+      ...formData,
+      [name]: value,
+      region_id: value !== 'региональное' ? null : formData.region_id
+    });
+  } else {
+    setFormData({
+      ...formData,
+      [name]: value
+    });
+  }
+};
 
   // Обработчик изменения дат
   const handleDateChange = (value, field) => {
@@ -215,9 +267,18 @@ const CompetitionCreate = () => {
     setError(null);
     
     try {
+      // Проверка на тип соревнования и роль
+      if (formData.type === 'федеральное' && userRole !== 'fsp_admin') {
+        throw new Error('Только администраторы ФСП могут создавать федеральные соревнования');
+      }
+      
+      if (formData.type === 'региональное' && userRole !== 'regional_rep' && userRole !== 'fsp_admin') {
+        throw new Error('Только региональные представители и администраторы ФСП могут создавать региональные соревнования');
+      }
+      
       // Проверка обязательных полей
       const requiredFields = [
-        'name', 'discipline_id', 'type', 
+        'name', 'discipline_id', 'type',
         'registration_start_date', 'registration_end_date',
         'start_date', 'end_date'
       ];
@@ -234,18 +295,13 @@ const CompetitionCreate = () => {
         }
       }
 
-      // Проверка авторизации и наличия ID пользователя
-      if (!user || !user.id) {
-        throw new Error('Сессия пользователя недействительна. Пожалуйста, войдите снова.');
-      }
-      
       // Проверим/создадим профиль пользователя
       const profileExists = await ensureUserProfile(user);
       if (!profileExists) {
         throw new Error('Не удалось подтвердить ваш профиль. Возможно, нужно обновить профильные данные.');
       }
       
-      // Отправка данных в базу
+      // Отправка данных в базу - СОЗДАНИЕ вместо обновления
       const { data, error } = await supabase
         .from('competitions')
         .insert([
