@@ -1,4 +1,5 @@
 // src/utils/roleUtils.js
+import { useState, useEffect } from 'react'; // Добавляем импорт useState и useEffect
 import { supabase } from '../supabaseClient';
 
 // Получение роли и региона пользователя

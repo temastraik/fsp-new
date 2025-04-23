@@ -5,7 +5,10 @@ import { supabase } from '../supabaseClient';
 import Navbar from './Navbar';
 import TeamApplicationForm from './TeamApplicationForm';
 import TeamsLookingForMembers from './TeamsLookingForMembers';
-import RegionalApplicationForm from './RegionalApplicationForm'; // Импортируем новый компонент
+import RegionalApplicationForm from './RegionalApplicationForm';
+import { canApplyToRegionalCompetition, canApplyToFederalAsRegionalRep } from '../utils/roleUtils';
+ 
+// Импортируем новый компонент
 
 const CompetitionDetails = () => {
   const { id } = useParams();
@@ -186,18 +189,18 @@ const CompetitionDetails = () => {
     return true;
   };
 
-  // Проверка, может ли пользователь подать региональную заявку
+  // Функция проверки возможности подачи региональных заявок:
   const canApplyAsRegionalRep = () => {
     return (
       userDetails && 
       competition && 
       competition.type === 'федеральное' && 
-      (userDetails.role === 'regional_rep' || userDetails.role === 'fsp_admin') && 
+      canApplyToFederalAsRegionalRep(userDetails.role) && 
       getCompetitionStatus() === 'открыта_регистрация'
     );
   };
 
-  // Проверка, может ли спортсмен подать заявку
+  // Функция проверки для обычных заявок:
   const canApplyAsAthlete = () => {
     if (!userDetails || !competition) return false;
     
@@ -206,16 +209,15 @@ const CompetitionDetails = () => {
     
     // Для регионального соревнования проверяем регион спортсмена
     if (competition.type === 'региональное') {
-      return userDetails.region_id === competition.region_id || userDetails.role === 'fsp_admin';
+      return canApplyToRegionalCompetition(
+        userDetails.region_id, 
+        competition.region_id, 
+        userDetails.role
+      );
     }
     
     // Для открытого соревнования - все могут подавать
-    if (competition.type === 'открытое') {
-      return true;
-    }
-    
-    // Для федерального - только админы и регпреды
-    return false;
+    return true;
   };
 
   if (loading && !competition) {

@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
 import { Link, useNavigate } from 'react-router-dom';
 import Navbar from './Navbar';
+import { canCreateFederalCompetition, canCreateRegionalCompetition } from '../utils/roleUtils';
 
 // Заменим компонент даты на встроенный DatePicker с кастомными стилями
 const CustomDateTimeInput = ({ value, onChange, placeholder, required = false }) => {
@@ -206,7 +207,7 @@ const handleChange = (e) => {
   
   if (name === 'type') {
     // Если выбран тип "федеральное", проверяем роль
-    if (value === 'федеральное' && userRole !== 'fsp_admin') {
+    if (value === 'федеральное' && !canCreateFederalCompetition(userRole)) {
       setError('Только администраторы ФСП могут создавать федеральные соревнования');
       return;
     }
@@ -268,11 +269,11 @@ const handleChange = (e) => {
     
     try {
       // Проверка на тип соревнования и роль
-      if (formData.type === 'федеральное' && userRole !== 'fsp_admin') {
+      if (formData.type === 'федеральное' && !canCreateFederalCompetition(userRole)) {
         throw new Error('Только администраторы ФСП могут создавать федеральные соревнования');
       }
       
-      if (formData.type === 'региональное' && userRole !== 'regional_rep' && userRole !== 'fsp_admin') {
+      if (formData.type === 'региональное' && !canCreateRegionalCompetition(userRole)) {
         throw new Error('Только региональные представители и администраторы ФСП могут создавать региональные соревнования');
       }
       
